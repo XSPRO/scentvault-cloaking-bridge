@@ -10,8 +10,8 @@ const STORE_DOMAIN = 'd1uaxf-xh.myshopify.com';
 const STOREFRONT_TOKEN = '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';
 const STOREFRONT_API = `https://${STORE_DOMAIN}/api/2024-01/graphql.json`;
 
-// CORS - update this to your Store A domain
-const ALLOWED_ORIGINS = ['*'];
+// CORS - Store A's domain(s)
+const ALLOWED_ORIGINS = ['*']; // UPDATE: replace * with your Store A domain e.g. ['https://scentvault.com']
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
