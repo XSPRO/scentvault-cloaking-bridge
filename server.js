@@ -7,7 +7,7 @@ app.use(express.json());
 
 // Store B config
 const STORE_DOMAIN = 'd1uaxf-xh.myshopify.com';
-const STOREFRONT_TOKEN = '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';
+const STOREFRONT_TOKEN = 'f40c693b0aaf0d17799b8738307332d6';
 const STOREFRONT_API = `https://${STORE_DOMAIN}/api/2024-01/graphql.json`;
 
 // CORS - Store A's domain(s)
