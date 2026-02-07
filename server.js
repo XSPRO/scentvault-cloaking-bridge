@@ -10,8 +10,8 @@ const STORE_DOMAIN = 'd1uaxf-xh.myshopify.com';
 const STOREFRONT_TOKEN = 'f40c693b0aaf0d17799b8738307332d6';
 const STOREFRONT_API = `https://${STORE_DOMAIN}/api/2024-01/graphql.json`;
 
-// CORS - Store A's domain(s)
-const ALLOWED_ORIGINS = ['*']; // UPDATE: replace * with your Store A domain e.g. ['https://scentvault.com']
+// CORS
+const ALLOWED_ORIGINS = ['*'];
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -58,7 +58,7 @@ async function findVariantBySku(sku) {
     }
   `;
   const data = await storefrontQuery(query);
-  
+
   if (!data.data || !data.data.products) return null;
 
   for (const product of data.data.products.edges) {
@@ -71,17 +71,18 @@ async function findVariantBySku(sku) {
   return null;
 }
 
-// Create a checkout on Store B
-async function createCheckout(lineItems) {
+// Create a cart on Store B and get checkout URL
+async function createCart(lineItems) {
   const query = `
-    mutation checkoutCreate($input: CheckoutCreateInput!) {
-      checkoutCreate(input: $input) {
-        checkout {
-          webUrl
+    mutation cartCreate($input: CartInput!) {
+      cartCreate(input: $input) {
+        cart {
+          id
+          checkoutUrl
         }
-        checkoutUserErrors {
-          message
+        userErrors {
           field
+          message
         }
       }
     }
@@ -89,7 +90,10 @@ async function createCheckout(lineItems) {
 
   const variables = {
     input: {
-      lineItems: lineItems,
+      lines: lineItems.map(item => ({
+        merchandiseId: item.variantId,
+        quantity: item.quantity,
+      })),
     },
   };
 
@@ -102,7 +106,6 @@ app.post('/checkout-bridge', async (req, res) => {
   try {
     let items;
 
-    // Parse items from request
     if (typeof req.body.items === 'string') {
       items = JSON.parse(req.body.items);
     } else {
@@ -134,23 +137,29 @@ app.post('/checkout-bridge', async (req, res) => {
       return res.status(400).send('No matching products found on checkout store');
     }
 
-    // Create checkout on Store B
-    const checkoutData = await createCheckout(lineItems);
+    // Create cart on Store B
+    const cartData = await createCart(lineItems);
+    console.log('Cart response:', JSON.stringify(cartData, null, 2));
 
-    if (checkoutData.data?.checkoutCreate?.checkout?.webUrl) {
-      const checkoutUrl = checkoutData.data.checkoutCreate.checkout.webUrl;
+    if (cartData.data?.cartCreate?.cart?.checkoutUrl) {
+      const checkoutUrl = cartData.data.cartCreate.cart.checkoutUrl;
       console.log('Redirecting to:', checkoutUrl);
       return res.redirect(302, checkoutUrl);
     }
 
     // Handle errors
-    const errors = checkoutData.data?.checkoutCreate?.checkoutUserErrors;
-    console.error('Checkout errors:', errors);
+    const errors = cartData.data?.cartCreate?.userErrors;
+    if (errors && errors.length > 0) {
+      console.error('Cart errors:', errors);
+      return res.status(500).send('Failed to create checkout: ' + errors.map(e => e.message).join(', '));
+    }
+
+    console.error('Unknown cart error:', JSON.stringify(cartData));
     return res.status(500).send('Failed to create checkout');
 
   } catch (err) {
     console.error('Bridge error:', err);
-    return res.status(500).send('Bridge error');
+    return res.status(500).send('Bridge error: ' + err.message);
   }
 });
 
