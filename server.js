@@ -8,18 +8,14 @@ app.use(express.json());
 // Store B config
 const STORE_DOMAIN = 'd1uaxf-xh.myshopify.com';
 const STOREFRONT_TOKEN = 'f40c693b0aaf0d17799b8738307332d6';
-const STOREFRONT_API = `https://${STORE_DOMAIN}/api/2024-01/graphql.json`;
+const STOREFRONT_API = `https://${STORE_DOMAIN}/api/2025-01/graphql.json`;
+const DISCORD_WEBHOOK = 'https://discord.com/api/webhooks/1470072581720768716/igNliuk2yPQabm4DllVcsj7MO8lVDbNerbTuhsDw9eu7kM5c7Hpz1oQyDIAEtR0grAkN';
 
 // CORS
-const ALLOWED_ORIGINS = ['*'];
-
 app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin || '*');
-    res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type');
-  }
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
@@ -44,11 +40,13 @@ async function findVariantBySku(sku) {
       products(first: 50, query: "sku:${sku}") {
         edges {
           node {
+            title
             variants(first: 50) {
               edges {
                 node {
                   id
                   sku
+                  title
                 }
               }
             }
@@ -64,14 +62,18 @@ async function findVariantBySku(sku) {
   for (const product of data.data.products.edges) {
     for (const variant of product.node.variants.edges) {
       if (variant.node.sku === sku) {
-        return variant.node.id;
+        return {
+          variantId: variant.node.id,
+          productTitle: product.node.title,
+          variantTitle: variant.node.title,
+        };
       }
     }
   }
   return null;
 }
 
-// Create a cart on Store B and get checkout URL
+// Create a cart on Store B
 async function createCart(lineItems) {
   const query = `
     mutation cartCreate($input: CartInput!) {
@@ -97,15 +99,28 @@ async function createCart(lineItems) {
     },
   };
 
-  const data = await storefrontQuery(query, variables);
-  return data;
+  return await storefrontQuery(query, variables);
+}
+
+// Discord notification
+function notifyDiscord(items, matchedItems) {
+  const productList = matchedItems
+    .map(i => `${i.productTitle} (x${i.quantity})`)
+    .join('\n');
+
+  fetch(DISCORD_WEBHOOK, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      content: '🛒 **Checkout Started**\nItems: ' + matchedItems.length + '\n\n' + productList,
+    }),
+  }).catch(() => {});
 }
 
 // Main bridge endpoint
 app.post('/checkout-bridge', async (req, res) => {
   try {
     let items;
-
     if (typeof req.body.items === 'string') {
       items = JSON.parse(req.body.items);
     } else {
@@ -116,20 +131,15 @@ app.post('/checkout-bridge', async (req, res) => {
       return res.status(400).send('No items provided');
     }
 
-    console.log('Bridge received items:', items);
-
-    // Look up each SKU on Store B and build line items
+    // Look up each SKU on Store B
     const lineItems = [];
+    const matchedItems = [];
+
     for (const item of items) {
-      const variantId = await findVariantBySku(item.sku);
-      if (variantId) {
-        lineItems.push({
-          variantId: variantId,
-          quantity: item.quantity,
-        });
-        console.log(`Matched SKU ${item.sku} -> ${variantId}`);
-      } else {
-        console.warn(`SKU not found on Store B: ${item.sku}`);
+      const match = await findVariantBySku(item.sku);
+      if (match) {
+        lineItems.push({ variantId: match.variantId, quantity: item.quantity });
+        matchedItems.push({ productTitle: match.productTitle, quantity: item.quantity });
       }
     }
 
@@ -139,36 +149,41 @@ app.post('/checkout-bridge', async (req, res) => {
 
     // Create cart on Store B
     const cartData = await createCart(lineItems);
-    console.log('Cart response:', JSON.stringify(cartData, null, 2));
 
     if (cartData.data?.cartCreate?.cart?.checkoutUrl) {
       const checkoutUrl = cartData.data.cartCreate.cart.checkoutUrl;
-      console.log('Redirecting to:', checkoutUrl);
+
+      // Send Discord notification after redirect
+      setImmediate(() => notifyDiscord(items, matchedItems));
+
+      res.set({
+        'Referrer-Policy': 'no-referrer',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+      });
+
       return res.redirect(302, checkoutUrl);
     }
 
-    // Handle errors
     const errors = cartData.data?.cartCreate?.userErrors;
     if (errors && errors.length > 0) {
-      console.error('Cart errors:', errors);
       return res.status(500).send('Failed to create checkout: ' + errors.map(e => e.message).join(', '));
     }
 
-    console.error('Unknown cart error:', JSON.stringify(cartData));
     return res.status(500).send('Failed to create checkout');
-
   } catch (err) {
-    console.error('Bridge error:', err);
     return res.status(500).send('Bridge error: ' + err.message);
   }
 });
 
 // Health check
 app.get('/', (req, res) => {
-  res.send('Checkout bridge is running');
+  res.json({
+    status: 'ScentVault Checkout Bridge is live',
+    timestamp: new Date().toISOString(),
+  });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Checkout bridge running on port ${PORT}`);
+  console.log(`Bridge running on port ${PORT}`);
 });
