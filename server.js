@@ -43,7 +43,7 @@ async function storefrontQuery(query, variables = {}) {
 async function findVariantBySku(sku) {
   const query = `
     {
-      products(first: 50, query: "sku:${sku}") {
+      products(first: 5, query: "sku:\\"${sku}\\"") {
         edges {
           node {
             title
@@ -196,7 +196,7 @@ app.get('/debug/:sku', async (req, res) => {
   const sku = req.params.sku;
   const query = `
     {
-      products(first: 10, query: "sku:${sku}") {
+      products(first: 5, query: "sku:\\"${sku}\\"") {
         edges {
           node {
             title
