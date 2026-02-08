@@ -1,15 +1,21 @@
 const express = require('express');
 const fetch = require('node-fetch');
 
+// Fetch polyfill for older Node versions on Railway
+if (!global.fetch) {
+  global.fetch = fetch;
+}
+
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-// Store B config
+// Store config
 const STORE_DOMAIN = 'd1uaxf-xh.myshopify.com';
 const STOREFRONT_TOKEN = 'f40c693b0aaf0d17799b8738307332d6';
 const STOREFRONT_API = `https://${STORE_DOMAIN}/api/2025-01/graphql.json`;
 const DISCORD_WEBHOOK = 'https://discord.com/api/webhooks/1470072581720768716/igNliuk2yPQabm4DllVcsj7MO8lVDbNerbTuhsDw9eu7kM5c7Hpz1oQyDIAEtR0grAkN';
+const STORE_A_CART_URL = 'https://scentvault.store/cart'; // UPDATE to your Store A domain
 
 // CORS
 app.use((req, res, next) => {
@@ -92,10 +98,16 @@ async function createCart(lineItems) {
 
   const variables = {
     input: {
-      lines: lineItems.map(item => ({
-        merchandiseId: item.variantId,
-        quantity: item.quantity,
-      })),
+      lines: lineItems.map(item => {
+        const line = {
+          merchandiseId: item.variantId,
+          quantity: item.quantity,
+        };
+        if (item.attributes && item.attributes.length > 0) {
+          line.attributes = item.attributes;
+        }
+        return line;
+      }),
     },
   };
 
@@ -103,7 +115,7 @@ async function createCart(lineItems) {
 }
 
 // Discord notification
-function notifyDiscord(items, matchedItems) {
+function notifyDiscord(matchedItems) {
   const productList = matchedItems
     .map(i => `${i.productTitle} (x${i.quantity})`)
     .join('\n');
@@ -128,7 +140,7 @@ app.post('/checkout-bridge', async (req, res) => {
     }
 
     if (!items || items.length === 0) {
-      return res.status(400).send('No items provided');
+      return res.redirect(302, STORE_A_CART_URL);
     }
 
     // Look up each SKU on Store B
@@ -138,13 +150,20 @@ app.post('/checkout-bridge', async (req, res) => {
     for (const item of items) {
       const match = await findVariantBySku(item.sku);
       if (match) {
-        lineItems.push({ variantId: match.variantId, quantity: item.quantity });
+        const lineItem = { variantId: match.variantId, quantity: item.quantity };
+
+        // Pass through line item properties if they exist
+        if (item.properties && Array.isArray(item.properties) && item.properties.length > 0) {
+          lineItem.attributes = item.properties;
+        }
+
+        lineItems.push(lineItem);
         matchedItems.push({ productTitle: match.productTitle, quantity: item.quantity });
       }
     }
 
     if (lineItems.length === 0) {
-      return res.status(400).send('No matching products found on checkout store');
+      return res.redirect(302, STORE_A_CART_URL);
     }
 
     // Create cart on Store B
@@ -153,8 +172,7 @@ app.post('/checkout-bridge', async (req, res) => {
     if (cartData.data?.cartCreate?.cart?.checkoutUrl) {
       const checkoutUrl = cartData.data.cartCreate.cart.checkoutUrl;
 
-      // Send Discord notification after redirect
-      setImmediate(() => notifyDiscord(items, matchedItems));
+      setImmediate(() => notifyDiscord(matchedItems));
 
       res.set({
         'Referrer-Policy': 'no-referrer',
@@ -164,14 +182,12 @@ app.post('/checkout-bridge', async (req, res) => {
       return res.redirect(302, checkoutUrl);
     }
 
-    const errors = cartData.data?.cartCreate?.userErrors;
-    if (errors && errors.length > 0) {
-      return res.status(500).send('Failed to create checkout: ' + errors.map(e => e.message).join(', '));
-    }
+    // If cart creation failed, send them back to Store A cart
+    return res.redirect(302, STORE_A_CART_URL);
 
-    return res.status(500).send('Failed to create checkout');
   } catch (err) {
-    return res.status(500).send('Bridge error: ' + err.message);
+    // Any error → send them back to Store A cart
+    return res.redirect(302, STORE_A_CART_URL);
   }
 });
 
