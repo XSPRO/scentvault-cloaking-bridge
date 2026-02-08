@@ -191,6 +191,35 @@ app.post('/checkout-bridge', async (req, res) => {
   }
 });
 
+// Debug endpoint - check what the API returns for a SKU
+app.get('/debug/:sku', async (req, res) => {
+  const sku = req.params.sku;
+  const query = `
+    {
+      products(first: 10, query: "sku:${sku}") {
+        edges {
+          node {
+            title
+            handle
+            onlineStoreUrl
+            variants(first: 10) {
+              edges {
+                node {
+                  id
+                  sku
+                  title
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+  const data = await storefrontQuery(query);
+  res.json(data);
+});
+
 // Health check
 app.get('/', (req, res) => {
   res.json({
