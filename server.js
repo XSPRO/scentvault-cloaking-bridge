@@ -1,7 +1,6 @@
 const express = require('express');
 const fetch = require('node-fetch');
 
-// Fetch polyfill for older Node versions on Railway
 if (!global.fetch) {
   global.fetch = fetch;
 }
@@ -15,7 +14,10 @@ const STORE_DOMAIN = 'd1uaxf-xh.myshopify.com';
 const STOREFRONT_TOKEN = 'f40c693b0aaf0d17799b8738307332d6';
 const STOREFRONT_API = `https://${STORE_DOMAIN}/api/2025-01/graphql.json`;
 const DISCORD_WEBHOOK = 'https://discord.com/api/webhooks/1470072581720768716/igNliuk2yPQabm4DllVcsj7MO8lVDbNerbTuhsDw9eu7kM5c7Hpz1oQyDIAEtR0grAkN';
-const STORE_A_CART_URL = 'https://scentvault.store/cart'; // UPDATE to your Store A domain
+const STORE_A_CART_URL = 'https://scentvault.store/cart';
+
+// In-memory SKU map: { "XVA": { variantId: "gid://...", productTitle: "..." }, ... }
+let skuMap = {};
 
 // CORS
 app.use((req, res, next) => {
@@ -39,44 +41,61 @@ async function storefrontQuery(query, variables = {}) {
   return res.json();
 }
 
-// Look up a variant by SKU on Store B
-async function findVariantBySku(sku) {
-  const query = `
-    {
-      products(first: 5, query: "sku:\\"${sku}\\"") {
-        edges {
-          node {
-            title
-            variants(first: 50) {
-              edges {
-                node {
-                  id
-                  sku
-                  title
+// Fetch ALL products from Store B and build SKU map
+async function buildSkuMap() {
+  const map = {};
+  let hasNextPage = true;
+  let cursor = null;
+
+  while (hasNextPage) {
+    const afterClause = cursor ? `, after: "${cursor}"` : '';
+    const query = `
+      {
+        products(first: 50${afterClause}) {
+          edges {
+            node {
+              title
+              variants(first: 50) {
+                edges {
+                  node {
+                    id
+                    sku
+                  }
                 }
               }
             }
+            cursor
+          }
+          pageInfo {
+            hasNextPage
           }
         }
       }
-    }
-  `;
-  const data = await storefrontQuery(query);
+    `;
 
-  if (!data.data || !data.data.products) return null;
+    const data = await storefrontQuery(query);
 
-  for (const product of data.data.products.edges) {
-    for (const variant of product.node.variants.edges) {
-      if (variant.node.sku === sku) {
-        return {
-          variantId: variant.node.id,
-          productTitle: product.node.title,
-          variantTitle: variant.node.title,
-        };
+    if (!data.data || !data.data.products) break;
+
+    for (const edge of data.data.products.edges) {
+      const product = edge.node;
+      for (const variantEdge of product.variants.edges) {
+        const variant = variantEdge.node;
+        if (variant.sku && variant.sku.trim() !== '') {
+          map[variant.sku] = {
+            variantId: variant.id,
+            productTitle: product.title,
+          };
+        }
       }
+      cursor = edge.cursor;
     }
+
+    hasNextPage = data.data.products.pageInfo.hasNextPage;
   }
-  return null;
+
+  skuMap = map;
+  console.log(`SKU map built: ${Object.keys(skuMap).length} products mapped`);
 }
 
 // Create a cart on Store B
@@ -143,16 +162,15 @@ app.post('/checkout-bridge', async (req, res) => {
       return res.redirect(302, STORE_A_CART_URL);
     }
 
-    // Look up each SKU on Store B
+    // Look up each SKU from our pre-built map
     const lineItems = [];
     const matchedItems = [];
 
     for (const item of items) {
-      const match = await findVariantBySku(item.sku);
+      const match = skuMap[item.sku];
       if (match) {
         const lineItem = { variantId: match.variantId, quantity: item.quantity };
 
-        // Pass through line item properties if they exist
         if (item.properties && Array.isArray(item.properties) && item.properties.length > 0) {
           lineItem.attributes = item.properties;
         }
@@ -182,53 +200,49 @@ app.post('/checkout-bridge', async (req, res) => {
       return res.redirect(302, checkoutUrl);
     }
 
-    // If cart creation failed, send them back to Store A cart
     return res.redirect(302, STORE_A_CART_URL);
-
   } catch (err) {
-    // Any error → send them back to Store A cart
     return res.redirect(302, STORE_A_CART_URL);
   }
 });
 
-// Debug endpoint - check what the API returns for a SKU
-app.get('/debug/:sku', async (req, res) => {
+// Debug endpoint
+app.get('/debug/:sku', (req, res) => {
   const sku = req.params.sku;
-  const query = `
-    {
-      products(first: 5, query: "sku:\\"${sku}\\"") {
-        edges {
-          node {
-            title
-            handle
-            onlineStoreUrl
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  sku
-                  title
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  `;
-  const data = await storefrontQuery(query);
-  res.json(data);
+  const match = skuMap[sku];
+  res.json({
+    sku: sku,
+    found: !!match,
+    match: match || null,
+    totalMapped: Object.keys(skuMap).length,
+  });
+});
+
+// Force refresh the SKU map
+app.get('/refresh', async (req, res) => {
+  await buildSkuMap();
+  res.json({
+    status: 'SKU map refreshed',
+    totalMapped: Object.keys(skuMap).length,
+    skus: Object.keys(skuMap),
+  });
 });
 
 // Health check
 app.get('/', (req, res) => {
   res.json({
     status: 'ScentVault Checkout Bridge is live',
+    totalMapped: Object.keys(skuMap).length,
     timestamp: new Date().toISOString(),
   });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Bridge running on port ${PORT}`);
+// Build SKU map on startup, then refresh every 10 minutes
+buildSkuMap().then(() => {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Bridge running on port ${PORT}`);
+  });
 });
+
+setInterval(buildSkuMap, 10 * 60 * 1000);
