@@ -189,6 +189,7 @@ app.post('/checkout-bridge', async (req, res) => {
 
     if (cartData.data?.cartCreate?.cart?.checkoutUrl) {
       const checkoutUrl = cartData.data.cartCreate.cart.checkoutUrl;
+      console.log('CHECKOUT URL:', checkoutUrl);
 
       setImmediate(() => notifyDiscord(matchedItems));
 
