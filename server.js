@@ -247,3 +247,17 @@ buildSkuMap().then(() => {
 });
 
 setInterval(buildSkuMap, 10 * 60 * 1000);
+app.post('/test-checkout', async (req, res) => {
+  let items;
+  if (typeof req.body.items === 'string') items = JSON.parse(req.body.items);
+  else items = req.body.items;
+
+  const lineItems = [];
+  for (const item of items) {
+    const match = skuMap[item.sku];
+    if (match) lineItems.push({ variantId: match.variantId, quantity: item.quantity });
+  }
+
+  const cartData = await createCart(lineItems);
+  res.json(cartData);
+});
