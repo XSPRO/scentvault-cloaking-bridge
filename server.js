@@ -13,7 +13,7 @@ app.use(express.json());
 const STORE_DOMAIN = 'd1uaxf-xh.myshopify.com';
 const STOREFRONT_TOKEN = 'f40c693b0aaf0d17799b8738307332d6';
 const STOREFRONT_API = `https://${STORE_DOMAIN}/api/2025-01/graphql.json`;
-const DISCORD_WEBHOOK = 'https://discord.com/api/webhooks/1462766339734245450/tvQamu299eAdNOGw3jEWI97J0g4nAEvJVaXTLcJifK_v86Z0lgSu2mEJ1vJtCI9J-t0k';
+const DISCORD_WEBHOOK = 'https://discord.com/api/webhooks/1464705561026105632/3kR4ZJNXuE9ixeMO3rXM8IEAkiu8-lML-Z4dUr_MmGslLg3VRi6q5uiQJVkf_mXtx-Gy';
 const STORE_A_CART_URL = 'https://scentvault.shop/cart';
 
 // In-memory SKU map: { "XVA": { variantId: "gid://...", productTitle: "..." }, ... }
